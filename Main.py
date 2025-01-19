@@ -49,6 +49,7 @@ for col in numeric_columns:
     X_val.loc[:, col] = (X_val[col] - min_vals[col]) / (max_vals[col] - min_vals[col])
     X_test.loc[:, col] = (X_test[col] - min_vals[col]) / (max_vals[col] - min_vals[col])
 
+
 # Function to calculate Euclidean distance between two samples
 def euclidean_distance(point1, point2, numeric_cols):
     squared_diff_sum = 0.0
@@ -56,6 +57,7 @@ def euclidean_distance(point1, point2, numeric_cols):
         diff = point1[col] - point2[col]
         squared_diff_sum += diff ** 2
     return math.sqrt(squared_diff_sum)
+
 
 # Function to find the nearest neighbor (1-NN) of a test sample
 def find_1nn(test_sample, train_data, numeric_cols):
@@ -71,6 +73,7 @@ def find_1nn(test_sample, train_data, numeric_cols):
 
     return nearest_label, min_distance
 
+
 # KNN classifier (using 1-NN logic here)
 def knn(X_train, y_train, X_test, k):
     y_pred = []
@@ -85,75 +88,39 @@ def knn(X_train, y_train, X_test, k):
 
     return np.array(y_pred)
 
-# Improved Naive Bayes classifier
-def naive_bayes(X_train, y_train, X_test):
-    # Step 1: Convert training data to document format
-    training_data = [(y_train.iloc[i], ' '.join(X_train.iloc[i].astype(str).values)) for i in range(len(y_train))]
 
-    # Step 2: Calculate the total number of documents
-    ptot = len(training_data)
+# Gaussian Naive Bayes classifier
+def gaussian_naive_bayes(X_train, y_train, X_test):
+    # Calculate mean and variance for each feature for each class
+    means = X_train.groupby(y_train).mean()
+    variances = X_train.groupby(y_train).var()
+    class_priors = y_train.value_counts(normalize=True)
 
-    # Step 3: Count how many documents every class has
-    pk = {}
-    for (class_label, _) in training_data:
-        if class_label not in pk:
-            pk[class_label] = 1
-        else:
-            pk[class_label] += 1
+    def calculate_probability(x, mean, var):
+        # Calculate the probability density function for Gaussian distribution
+        exponent = np.exp(-((x - mean) ** 2) / (2 * var))
+        return (1 / np.sqrt(2 * np.pi * var)) * exponent
 
-    # Step 4: Create a dictionary with all unique words from all documents
-    word_dict = set()
-    for _, doc in training_data:
-        words = doc.split()
-        for word in words:
-            word_dict.add(word.lower())  # Convert words to lowercase for consistency
+    def predict(sample):
+        class_probabilities = {}
+        for class_label in means.index:
+            class_prob = class_priors[class_label]
+            for col in numeric_columns:
+                class_prob *= calculate_probability(sample[col], means.loc[class_label, col], variances.loc[class_label, col])
+            class_probabilities[class_label] = class_prob
+        return max(class_probabilities, key=class_probabilities.get)
 
-    # Initialize dictionary to count how many documents each word appears in for every class
-    pki = {word: {class_label: 0 for class_label in pk} for word in word_dict}
+    # Predict X_test using the trained Gaussian Naive Bayes classifier
+    predictions = X_test.apply(predict, axis=1)
+    return predictions.values
 
-    # Step 5: Count how many documents each word appears in for every class
-    for (class_label, doc) in training_data:
-        words = set(doc.lower().split())  # Convert to lowercase and set for uniqueness
-        for word in words:
-            pki[word][class_label] += 1
-
-    def predict(document):
-        # Split the document into words, convert to lowercase
-        words = set(document.lower().split())
-
-        # Initialize a dictionary to store the log probability sum of each class
-        class_log_probabilities = {}
-
-        # Calculate the log probability of the document for each class
-        for class_label in pk:
-            # Start with the log probability of the class itself
-            class_log_probabilities[class_label] = math.log(pk[class_label] / ptot)
-
-            # Add the log probability of each word given the class
-            for word in words:
-                if word in word_dict:
-                    # Use Laplace smoothing
-                    word_prob = (pki[word][class_label] + 1) / (pk[class_label] + len(word_dict))
-                    class_log_probabilities[class_label] += math.log(word_prob)
-
-        # Predict the class with the highest log probability sum
-        predicted_class = max(class_log_probabilities, key=class_log_probabilities.get)
-
-        return predicted_class, class_log_probabilities
-
-    # Predict X_test using the trained Naive Bayes classifier
-    predictions = []
-    for doc in X_test.astype(str).apply(lambda row: ' '.join(row.values), axis=1):
-        predicted_class, _ = predict(doc)
-        predictions.append(predicted_class)
-
-    return np.array(predictions)
 
 # Function to calculate entropy
 def entropy(y):
     class_counts = np.bincount(y)
     probabilities = class_counts / len(y)
     return -np.sum([p * np.log2(p) for p in probabilities if p > 0])
+
 
 # Function to calculate information gain for a categorical attribute
 def information_gain_categorical(X, y, attribute):
@@ -164,23 +131,38 @@ def information_gain_categorical(X, y, attribute):
         weighted_entropy += (len(subset_y) / len(y)) * entropy(subset_y)
     return entropy(y) - weighted_entropy
 
+
 # Function to calculate information gain for a real-valued attribute
 def information_gain_real(X, y, attribute):
+    # Sort the data based on the attribute values
     sorted_indices = X[attribute].argsort()
     sorted_X, sorted_y = X.iloc[sorted_indices], y.iloc[sorted_indices]
     sorted_y = sorted_y.reset_index(drop=True)  # Reset index to avoid KeyError
+
     best_info_gain = -1
     best_threshold = None
+
+    # Iterate through possible split points to find the best threshold
     for i in range(1, len(sorted_y)):
         if sorted_y[i] != sorted_y[i - 1]:
+            # Calculate the threshold as the midpoint between two consecutive values
             threshold = (sorted_X[attribute].iloc[i] + sorted_X[attribute].iloc[i - 1]) / 2
+
+            # Split the data into left and right subsets
             left_y = sorted_y[:i]
             right_y = sorted_y[i:]
-            info_gain = entropy(y) - ((len(left_y) / len(y)) * entropy(left_y) + (len(right_y) / len(y)) * entropy(right_y))
+
+            # Calculate the information gain
+            info_gain = entropy(y) - (
+                        (len(left_y) / len(y)) * entropy(left_y) + (len(right_y) / len(y)) * entropy(right_y))
+
+            # Update the best information gain and threshold
             if info_gain > best_info_gain:
                 best_info_gain = info_gain
                 best_threshold = threshold
+
     return best_info_gain, best_threshold
+
 
 # Recursive function to learn an unpruned decision tree
 def LearnUnprunedTree(X, y):
@@ -228,6 +210,7 @@ def LearnUnprunedTree(X, y):
 
     return tree
 
+
 # Function to classify a sample using the decision tree
 def classify(tree, sample):
     if tree['type'] == 'leaf':
@@ -245,42 +228,46 @@ def classify(tree, sample):
             # If the value is not seen during training, return the mode of the training target
             return y_train.mode()[0]
 
+
 # Decision Tree classifier
 def decision_tree(X_train, y_train, X_test):
     tree = LearnUnprunedTree(X_train, y_train)
     y_pred = [classify(tree, sample) for _, sample in X_test.iterrows()]
     return np.array(y_pred)
 
+
+# Function to evaluate and print metrics
+def evaluate_model(y_true, y_pred, set_name):
+    accuracy = np.mean(y_true == y_pred)
+    precision = np.sum((y_true == 1) & (y_pred == 1)) / np.sum(y_pred == 1) if np.sum(y_pred == 1) != 0 else 0
+    recall = np.sum((y_true == 1) & (y_pred == 1)) / np.sum(y_true == 1) if np.sum(y_true == 1) != 0 else 0
+    f_measure = 2 * (precision * recall) / (precision + recall) if (precision + recall) != 0 else 0
+    print(
+        f"{set_name} - Accuracy: {accuracy:.2f}, Precision: {precision:.2f}, Recall: {recall:.2f}, F-measure: {f_measure:.2f}")
+
+
 # Main function to run the classifiers
 def main():
     k = 5  # Number of neighbors for KNN
+
     # KNN Classifier
     y_pred_knn_val = knn(X_train, y_train, X_val, k)
-    accuracy_knn_val = np.mean(y_pred_knn_val == y_val)
-    print(f"KNN Validation Accuracy: {accuracy_knn_val:.2f}")
+    y_pred_knn_test = knn(X_train, y_train, X_test, k)
+    evaluate_model(y_val, y_pred_knn_val, "KNN Validation")
+    evaluate_model(y_test, y_pred_knn_test, "KNN Test")
 
     # Naive Bayes Classifier
-    y_pred_nb_val = naive_bayes(X_train, y_train, X_val)
-    accuracy_nb_val = np.mean(y_pred_nb_val == y_val)
-    print(f"Naive Bayes Validation Accuracy: {accuracy_nb_val:.2f}")
+    y_pred_nb_val = gaussian_naive_bayes(X_train, y_train, X_val)
+    y_pred_nb_test = gaussian_naive_bayes(X_train, y_train, X_test)
+    evaluate_model(y_val, y_pred_nb_val, "Naive Bayes Validation")
+    evaluate_model(y_test, y_pred_nb_test, "Naive Bayes Test")
 
     # Decision Tree Classifier
     y_pred_dt_val = decision_tree(X_train, y_train, X_val)
-    accuracy_dt_val = np.mean(y_pred_dt_val == y_val)
-    print(f"Decision Tree Validation Accuracy: {accuracy_dt_val:.2f}")
-
-    # Evaluate all models on the test set
-    y_pred_knn_test = knn(X_train, y_train, X_test, k)
-    accuracy_knn_test = np.mean(y_pred_knn_test == y_test)
-    print(f"KNN Test Accuracy: {accuracy_knn_test:.2f}")
-
-    y_pred_nb_test = naive_bayes(X_train, y_train, X_test)
-    accuracy_nb_test = np.mean(y_pred_nb_test == y_test)
-    print(f"Naive Bayes Test Accuracy: {accuracy_nb_test:.2f}")
-
     y_pred_dt_test = decision_tree(X_train, y_train, X_test)
-    accuracy_dt_test = np.mean(y_pred_dt_test == y_test)
-    print(f"Decision Tree Test Accuracy: {accuracy_dt_test:.2f}")
+    evaluate_model(y_val, y_pred_dt_val, "Decision Tree Validation")
+    evaluate_model(y_test, y_pred_dt_test, "Decision Tree Test")
+
 
 if __name__ == "__main__":
     main()
